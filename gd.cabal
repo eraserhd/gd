@@ -22,10 +22,11 @@ Library
     -- in base 1.0 and 3.0 bytestring is a separate package
     Build-depends: base < 2.0 || >= 3, bytestring >= 0.9
   Extensions: ForeignFunctionInterface
-  Exposed-Modules: Graphics.GD
+  Exposed-Modules: Graphics.GD, Graphics.GD.ByteString, Graphics.GD.ByteString.Lazy
   Ghc-options: -Wall
-  Extra-libraries: gd, png, z, jpeg, m, fontconfig, freetype, pthread, expat
+  Extra-libraries: gd, png, z, jpeg, m, fontconfig, freetype, expat
   Includes: gd.h
   Include-dirs:        cbits
   Install-includes: gd-extras.h
   C-sources:           cbits/gd-extras.c
+  Other-modules: Graphics.GD.Internal
