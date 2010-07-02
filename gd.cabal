@@ -1,9 +1,11 @@
 Name: gd
-Version: 3000.4.0
+Category: Graphics
+License-File: LICENSE
+Version: 1000.0
 Cabal-version: >= 1.2
 Build-type: Simple
 Copyright: Bjorn Bringert
-Maintainer: bjorn@bringert.net
+Maintainer: Chris Done <chrisdone@gmail.com>
 Author: Bjorn Bringert
 License: BSD3
 Synopsis: A Haskell binding to a subset of the GD graphics library
