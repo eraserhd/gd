@@ -40,11 +40,15 @@ module Graphics.GD (
                     rgb, rgba
                    ) where
 
-import Control.Exception (bracket)
-import Control.Monad (liftM, unless)
+import           Control.Exception        (bracket)
+import           Control.Monad            (liftM, unless)
 import qualified Data.ByteString.Internal as B
-import Foreign
-import Foreign.C
+import           Foreign                  (Ptr,FunPtr,ForeignPtr)
+import           Foreign                  (peekByteOff)
+import qualified Foreign                  as F
+import           Foreign                  ((.|.))
+import           Foreign.C                (CInt,CString,CDouble)
+import qualified Foreign.C                as C
 
 data CFILE = CFILE
 
@@ -55,11 +59,11 @@ foreign import ccall "stdio.h fclose" c_fclose
 
 fopen :: FilePath -> String -> IO (Ptr CFILE)
 fopen file mode = 
-    throwErrnoIfNull file $ withCString file $ 
-                         \f -> withCString mode $ \m -> c_fopen f m
+    C.throwErrnoIfNull file $ C.withCString file $ 
+                         \f -> C.withCString mode $ \m -> c_fopen f m
 
 fclose :: Ptr CFILE -> IO ()
-fclose p = throwErrnoIf_ (== #{const EOF}) "fclose" $ c_fclose p
+fclose p = C.throwErrnoIf_ (== #{const EOF}) "fclose" $ c_fclose p
 
 withCFILE :: FilePath -> String -> (Ptr CFILE -> IO a) -> IO a
 withCFILE file mode = bracket (fopen file mode) fclose
@@ -119,7 +123,8 @@ foreign import ccall "gd.h gdImageCreateTrueColor" gdImageCreateTrueColor
 foreign import ccall "gd.h gdImageDestroy" gdImageDestroy
     :: Ptr GDImage -> IO ()
 
-foreign import ccall "gd-extras.h &gdImagePtrDestroyIfNotNull" ptr_gdImagePtrDestroyIfNotNull 
+foreign import ccall "gd-extras.h &gdImagePtrDestroyIfNotNull"
+        ptr_gdImagePtrDestroyIfNotNull 
     :: FunPtr (Ptr (Ptr GDImage) -> IO ())
 
 
@@ -175,10 +180,12 @@ foreign import ccall "gd.h gdFTUseFontConfig" gdFTUseFontConfig
     :: CInt -> IO CInt
 
 foreign import ccall "gd.h gdImageStringFT" gdImageStringFT
-    :: Ptr GDImage -> Ptr CInt -> CInt -> CString -> CDouble -> CDouble -> CInt -> CInt -> CString -> IO CString
+    :: Ptr GDImage -> Ptr CInt -> CInt -> CString -> CDouble -> CDouble ->
+       CInt -> CInt -> CString -> IO CString
 
 foreign import ccall "gd.h gdImageStringFTCircle" gdImageStringFTCircle
-    :: Ptr GDImage -> CInt -> CInt -> CDouble -> CDouble -> CDouble -> CString -> CDouble -> CString -> CString -> CInt -> IO CString
+    :: Ptr GDImage -> CInt -> CInt -> CDouble -> CDouble -> CDouble -> CString
+       -> CDouble -> CString -> CString -> CInt -> IO CString
 
 -- Miscellaneous functions
 
@@ -197,20 +204,21 @@ type Point = (Int,Int)
 type Color = CInt
 
 mkImage :: Ptr GDImage -> IO Image
-mkImage img = do fp <- mallocForeignPtr
-                 withForeignPtr fp $ \p -> poke p img
-                 addForeignPtrFinalizer ptr_gdImagePtrDestroyIfNotNull fp
+mkImage img = do fp <- F.mallocForeignPtr
+                 F.withForeignPtr fp $ \p -> F.poke p img
+                 F.addForeignPtrFinalizer ptr_gdImagePtrDestroyIfNotNull fp
                  return $ Image fp
 
 -- | Creates an image, performs an operation on the image, and
 -- frees it.
--- This function allows block scoped management of 'Image' objects.
--- If you are handling large images, the delay before the finalizer which frees
--- the image runs may cause significant temporary extra memory use.
--- Use this function to force the image to be freed as soons as you are done with it.
--- Note that it is unsafe to hold on to the 'Image' after the
--- function is done.
-withImage :: IO Image -- ^ Image creation action.
+-- This function allows block scoped management of 'Image'
+-- objects.  If you are handling large images, the delay before
+-- the finalizer which frees the image runs may cause significant
+-- temporary extra memory use.  Use this function to force the
+-- image to be freed as soons as you are done with it.  Note that
+-- it is unsafe to hold on to the 'Image' after the function is
+-- done.
+withImage :: IO Image        -- ^ Image creation action.
           -> (Image -> IO b) -- ^ Some operation on the image. The result should
                              -- not reference the 'Image'.
           -> IO b
@@ -220,21 +228,22 @@ withImage ini f = bracket ini freeImage f
 -- Safe to call twice. Doesn't free the 'ForeignPtr', we rely on the
 -- GC to do that.
 freeImage :: Image -> IO ()
-freeImage (Image fp) = withForeignPtr fp $ 
-  \pp -> do p <- peek pp
-            poke pp nullPtr
-            unless (p == nullPtr) $ gdImageDestroy p
+freeImage (Image fp) = F.withForeignPtr fp $ 
+  \pp -> do p <- F.peek pp
+            F.poke pp F.nullPtr
+            unless (p == F.nullPtr) $ gdImageDestroy p
 
 withImagePtr :: Image -> (Ptr GDImage -> IO a) -> IO a
-withImagePtr (Image fp) f = withForeignPtr fp $
-  \pp -> peek pp >>= \p -> if p == nullPtr then fail "Image has been freed." else f p
+withImagePtr (Image fp) f = F.withForeignPtr fp $
+  \pp -> F.peek pp >>= \p ->
+       if p == F.nullPtr then fail "Image has been freed." else f p
 
 -- | Create a new empty image.
 newImage :: Size -> IO Image
 newImage (w,h) = newImage_ (int w) (int h)
 
 newImage_  :: CInt -> CInt -> IO Image
-newImage_ w h = do p <- throwIfNull "gdImageCreateTrueColor" $
+newImage_ w h = do p <- F.throwIfNull "gdImageCreateTrueColor" $
                         gdImageCreateTrueColor w h
                    mkImage p
 
@@ -249,8 +258,8 @@ copyImage i = withImagePtr i f
                  onNewImage w h (\p' -> gdImageCopy p' p 0 0 0 0 w h)
 
 -- | Copy a region of one image into another
-copyRegion :: Point -- ^ Source upper left-hand corner
-              -> Size -- ^ Size of copied region
+copyRegion :: Point    -- ^ Source upper left-hand corner
+              -> Size  -- ^ Size of copied region
               -> Image -- ^ Source image
               -> Point -- ^ Destination upper left-hand corner
               -> Image -- ^ Destination image
@@ -258,20 +267,23 @@ copyRegion :: Point -- ^ Source upper left-hand corner
 copyRegion (srcX, srcY) (w, h) srcIPtr (dstX, dstY) dstIPtr
     = withImagePtr dstIPtr $
       \dstImg -> withImagePtr srcIPtr $
-      \srcImg -> gdImageCopy dstImg srcImg (int dstX) (int dstY) (int srcX) (int srcY) (int w) (int h)
+      \srcImg -> gdImageCopy dstImg srcImg
+                    (int dstX) (int dstY) (int srcX) (int srcY) (int w) (int h)
 
 -- | Copy a region of one image into another, rescaling the region 
 copyRegionScaled :: Point -- ^ Source upper left-hand corner
-                 -> Size -- ^ Size of source region
+                 -> Size  -- ^ Size of source region
                  -> Image -- ^ Source image
                  -> Point -- ^ Destination upper left-hand corner
-                 -> Size -- ^ Size of destination region
+                 -> Size  -- ^ Size of destination region
                  -> Image -- ^ Destination image
                  -> IO ()
-copyRegionScaled (srcX, srcY) (srcW, srcH) srcIPtr (dstX, dstY) (dstW, dstH) dstIPtr
+copyRegionScaled (srcX,srcY) (srcW,srcH) srcIPtr (dstX,dstY) (dstW,dstH) dstIPtr
     = withImagePtr dstIPtr $
       \dstImg -> withImagePtr srcIPtr $
-      \srcImg -> gdImageCopyResampled dstImg srcImg (int dstX) (int dstY) (int srcX) (int srcY) (int dstW) (int dstH) (int srcW) (int srcH)
+      \srcImg -> gdImageCopyResampled dstImg srcImg
+                   (int dstX) (int dstY) (int srcX) (int srcY)
+                   (int dstW) (int dstH) (int srcW) (int srcH)
 
 --
 -- * Loading images
@@ -282,7 +294,7 @@ loadJpegFile :: FilePath -> IO Image
 loadJpegFile = loadImageFile gdImageCreateFromJpeg
 
 -- | Load a JPEG image from a buffer.
-loadJpegData :: Int -- ^ Buffer size.
+loadJpegData :: Int   -- ^ Buffer size.
              -> Ptr a -- ^ Buffer with image data.
              -> IO Image
 loadJpegData = loadImageData gdImageCreateFromJpegPtr
@@ -297,7 +309,7 @@ loadPngFile :: FilePath -> IO Image
 loadPngFile = loadImageFile gdImageCreateFromPng
 
 -- | Load a PNG image from a buffer.
-loadPngData :: Int -- ^ Buffer size.
+loadPngData :: Int   -- ^ Buffer size.
             -> Ptr a -- ^ Buffer with image data.
             -> IO Image
 loadPngData = loadImageData gdImageCreateFromPngPtr
@@ -311,7 +323,7 @@ loadGifFile :: FilePath -> IO Image
 loadGifFile = loadImageFile gdImageCreateFromGif
 
 -- | Load a GIF image from a buffer.
-loadGifData :: Int -- ^ Buffer size.
+loadGifData :: Int   -- ^ Buffer size.
             -> Ptr a -- ^ Buffer with image data.
             -> IO Image
 loadGifData = loadImageData gdImageCreateFromGifPtr
@@ -322,19 +334,20 @@ loadGifByteString = onByteStringData loadGifData
 
 
 loadImageFile :: (Ptr CFILE -> IO (Ptr GDImage)) -> FilePath -> IO Image
-loadImageFile f file = 
-    do p <- throwIfNull ("Loading image from " ++ file) $ withCFILE file "rb" f
-       mkImage p
+loadImageFile f file = do
+    p <- F.throwIfNull ("Loading image from " ++ file) $ withCFILE file "rb" f
+    mkImage p
 
 loadImageData :: (CInt -> Ptr a -> IO (Ptr GDImage)) -> Int -> Ptr a -> IO Image
-loadImageData f sz buf =
-    do p <- throwIfNull ("Loading image") $ f (fromIntegral sz) buf
-       mkImage p
+loadImageData f sz buf = do
+    p <- F.throwIfNull ("Loading image") $ f (fromIntegral sz) buf
+    mkImage p
 
 onByteStringData :: (Int -> Ptr a -> IO b) -> B.ByteString -> IO b
-onByteStringData f bstr 
-    = case B.toForeignPtr bstr of
-        (fptr, start, sz) -> withForeignPtr fptr (\ptr -> f sz (plusPtr ptr start))
+onByteStringData f bstr =
+    case B.toForeignPtr bstr of
+      (fptr, start, sz) -> F.withForeignPtr fptr $
+                           \ptr -> f sz (F.plusPtr ptr start)
 
 --
 -- * Saving images
@@ -347,7 +360,8 @@ saveJpegFile q = saveImageFile (\p h -> gdImageJpeg p h (fromIntegral q))
 
 -- | Write a JPEG format ByteString of an image.
 saveJpegByteString :: Int -> Image -> IO B.ByteString
-saveJpegByteString q = saveImageByteString (\p h -> gdImageJpegPtr p h (fromIntegral q))
+saveJpegByteString q =
+  saveImageByteString (\p h -> gdImageJpegPtr p h (fromIntegral q))
 
 
 -- | Save an image as a PNG file.
@@ -367,15 +381,18 @@ saveGifFile = saveImageFile gdImageGif
 saveGifByteString :: Image -> IO B.ByteString
 saveGifByteString = saveImageByteString gdImageGifPtr
 
-saveImageFile :: (Ptr GDImage -> Ptr CFILE -> IO ()) -> FilePath -> Image -> IO ()
+saveImageFile :: (Ptr GDImage -> Ptr CFILE -> IO ()) 
+                 -> FilePath -> Image -> IO ()
 saveImageFile f file i = withImagePtr i (\p -> withCFILE file "wb" (f p))
 
-saveImageByteString :: (Ptr GDImage -> Ptr CInt -> IO (Ptr a)) -> Image -> IO (B.ByteString)
+saveImageByteString :: (Ptr GDImage -> Ptr CInt -> IO (Ptr a)) -> Image
+                       -> IO (B.ByteString)
 saveImageByteString f img = withImagePtr img (\p -> dataByteString (f p))
 
 dataByteString :: (Ptr CInt -> IO (Ptr a)) -> IO B.ByteString
-dataByteString f = alloca $ \szPtr -> do datPtr <- f szPtr >>= newForeignPtr gdFree . castPtr
-                                         liftM (B.fromForeignPtr datPtr 0 . fromIntegral) (peek szPtr)
+dataByteString f = F.alloca $ \szPtr -> do
+    datPtr <- f szPtr >>= F.newForeignPtr gdFree . F.castPtr
+    liftM (B.fromForeignPtr datPtr 0 . fromIntegral) (F.peek szPtr)
                                        
 --
 -- * Getting information about images.
@@ -488,9 +505,13 @@ drawString :: String -- ^ Font name
            -> Double -- ^ Angle in counterclockwise radians
            -> Point -- ^ Origin
            -> String -- ^ Text, including HTML entities
-           -> Color -> Image -> IO (Point, Point, Point, Point) -- ^ Bounding box of the drawn text
+           -> Color -> Image
+           -> IO (Point, Point, Point, Point) -- ^ Bounding box
+                                              -- of the drawn
+                                              -- text.
 drawString fontName ptSize angle (oriX, oriY) txt color img
-    = withImagePtr img $ drawStringImagePtr color fontName ptSize angle (oriX, oriY) txt
+    = withImagePtr img $
+        drawStringImagePtr color fontName ptSize angle (oriX, oriY) txt
 
 -- | Measure a string using the FreeType 2.x library.  This computes
 -- the bounding box but does not actually draw the string to any
@@ -500,22 +521,31 @@ measureString :: String -- ^ Font name
               -> Double -- ^ Angle in counterclockwise radians
               -> Point -- ^ Origin
               -> String -- ^ Text, including HTML entities
-              -> Color -> IO (Point, Point, Point, Point) -- ^ Bounding box of the drawn text
+              -> Color
+              -> IO (Point, Point, Point, Point) -- ^ Bounding
+                                                 -- box of the
+                                                 -- drawn text
 measureString fontName ptSize angle (oriX, oriY) txt color
-    = drawStringImagePtr color fontName ptSize angle (oriX, oriY) txt nullPtr
+    = drawStringImagePtr color fontName ptSize angle (oriX, oriY) txt F.nullPtr
 
-drawStringImagePtr :: Color -> String -> Double -> Double -> Point -> String -> Ptr GDImage -> IO (Point, Point, Point, Point)
+drawStringImagePtr :: Color -> String -> Double -> Double -> Point -> String ->
+                      Ptr GDImage -> IO (Point, Point, Point, Point)
 drawStringImagePtr color fontName ptSize angle (oriX, oriY) txt imgPtr
-    = allocaArray 8 $
-      \bboxPtr -> withCAString fontName $
-      \cFontName -> withCAString txt $
-      \cTxt -> do res <- gdImageStringFT imgPtr bboxPtr color cFontName (double ptSize) (double angle) (int oriX) (int oriY) cTxt
-                  if res == nullPtr
-                     then peekArray 8 bboxPtr >>= parseBBox
-                     else peekCAString res >>= ioError . userError
-    where parseBBox l = case map int l of
-                          [llx, lly, lrx, lry, urx, ury, ulx, uly] -> return ((llx, lly), (lrx, lry), (urx, ury), (ulx, uly))
-                          _ -> ioError $ userError $ "parseBBox with /= 8 elements: " ++ show l
+    = F.allocaArray 8 $
+      \bboxPtr -> C.withCAString fontName $
+      \cFontName -> C.withCAString txt $
+      \cTxt -> do res <- gdImageStringFT imgPtr bboxPtr color cFontName
+                                         (double ptSize) (double angle)
+                                         (int oriX) (int oriY) cTxt
+                  if res == F.nullPtr
+                     then F.peekArray 8 bboxPtr >>= parseBBox
+                     else C.peekCAString res >>= ioError . userError
+    where parseBBox l =
+            case map int l of
+              [llx, lly, lrx, lry, urx, ury, ulx, uly] ->
+                return ((llx, lly), (lrx, lry), (urx, ury), (ulx, uly))
+              _ -> ioError $ userError $
+                     "parseBBox with /= 8 elements: " ++ show l
 
 -- | Draw strings around the top and bottom of a torus
 drawStringCircle :: Point -- ^ Center of text path circle
@@ -528,13 +558,18 @@ drawStringCircle :: Point -- ^ Center of text path circle
                  -> String -- ^ Text to write on the bottom of the circle
                  -> Color -- ^ Text color
                  -> Image -> IO ()
-drawStringCircle (ctrX, ctrY) rad textRad textFill fontName fontSize topTxt bottomTxt color img
-    = withCAString fontName $ 
-      \cFontName -> withCAString topTxt $
-      \cTopTxt -> withCAString bottomTxt $ 
+drawStringCircle (ctrX, ctrY) rad textRad textFill fontName
+                 fontSize topTxt bottomTxt color img
+    = C.withCAString fontName $ 
+      \cFontName -> C.withCAString topTxt $
+      \cTopTxt -> C.withCAString bottomTxt $ 
       \cBottomTxt -> withImagePtr img $ 
-      \imgPtr -> do res <- gdImageStringFTCircle imgPtr (int ctrX) (int ctrY) (double rad) (double textRad) (double textFill) cFontName (double fontSize) cTopTxt cBottomTxt  color                    
-                    unless (res == nullPtr) (peekCAString res >>= ioError . userError)
+      \imgPtr -> do
+        res <- gdImageStringFTCircle imgPtr
+                   (int ctrX) (int ctrY) (double rad) (double textRad)
+                   (double textFill) cFontName (double fontSize)
+                   cTopTxt cBottomTxt  color                    
+        unless (res == F.nullPtr) (C.peekCAString res >>= ioError . userError)
 
 --
 -- * Colors
@@ -552,9 +587,9 @@ rgba :: Int -- ^ Red (0-255)
           -> Int -- ^ Alpha (0-127), 0 is opaque, 127 is transparent
           -> Color
 rgba r g b a = 
-    (int a `shiftL` 24) .|.
-    (int r `shiftL` 16) .|.
-    (int g `shiftL` 8)  .|.
+    (int a `F.shiftL` 24) .|.
+    (int r `F.shiftL` 16) .|.
+    (int g `F.shiftL` 8)  .|.
     int b
 
 

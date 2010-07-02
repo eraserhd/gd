@@ -1,9 +1,12 @@
 module Graphics.GD.Internal where
 
-import Control.Exception (bracket)
-import Control.Monad (liftM, unless)
-import Foreign
-import Foreign.C
+import           Control.Exception (bracket)
+import           Control.Monad     (liftM, unless)
+import           Foreign           (Ptr,FunPtr,ForeignPtr)
+import qualified Foreign           as F
+import           Foreign           (peek,peekByteOff,(.|.))
+import           Foreign.C         (CDouble,CInt,CString)
+import qualified Foreign.C         as C
 
 data CFILE = CFILE
 
@@ -14,11 +17,11 @@ foreign import ccall "stdio.h fclose" c_fclose
 
 fopen :: FilePath -> String -> IO (Ptr CFILE)
 fopen file mode = 
-    throwErrnoIfNull file $ withCString file $ 
-                         \f -> withCString mode $ \m -> c_fopen f m
+    C.throwErrnoIfNull file $ C.withCString file $ 
+                         \f -> C.withCString mode $ \m -> c_fopen f m
 
 fclose :: Ptr CFILE -> IO ()
-fclose p = throwErrnoIf_ (== #{const EOF}) "fclose" $ c_fclose p
+fclose p = C.throwErrnoIf_ (== #{const EOF}) "fclose" $ c_fclose p
 
 withCFILE :: FilePath -> String -> (Ptr CFILE -> IO a) -> IO a
 withCFILE file mode = bracket (fopen file mode) fclose
@@ -78,7 +81,8 @@ foreign import ccall "gd.h gdImageCreateTrueColor" gdImageCreateTrueColor
 foreign import ccall "gd.h gdImageDestroy" gdImageDestroy
     :: Ptr GDImage -> IO ()
 
-foreign import ccall "gd-extras.h &gdImagePtrDestroyIfNotNull" ptr_gdImagePtrDestroyIfNotNull 
+foreign import ccall "gd-extras.h &gdImagePtrDestroyIfNotNull"
+    ptr_gdImagePtrDestroyIfNotNull 
     :: FunPtr (Ptr (Ptr GDImage) -> IO ())
 
 
@@ -136,10 +140,12 @@ foreign import ccall "gd.h gdFTUseFontConfig" gdFTUseFontConfig
     :: CInt -> IO CInt
 
 foreign import ccall "gd.h gdImageStringFT" gdImageStringFT
-    :: Ptr GDImage -> Ptr CInt -> CInt -> CString -> CDouble -> CDouble -> CInt -> CInt -> CString -> IO CString
+    :: Ptr GDImage -> Ptr CInt -> CInt -> CString -> CDouble -> CDouble -> CInt
+       -> CInt -> CString -> IO CString
 
 foreign import ccall "gd.h gdImageStringFTCircle" gdImageStringFTCircle
-    :: Ptr GDImage -> CInt -> CInt -> CDouble -> CDouble -> CDouble -> CString -> CDouble -> CString -> CString -> CInt -> IO CString
+    :: Ptr GDImage -> CInt -> CInt -> CDouble -> CDouble -> CDouble -> CString
+       -> CDouble -> CString -> CString -> CInt -> IO CString
 
 -- Miscellaneous functions
 
@@ -158,20 +164,21 @@ type Point = (Int,Int)
 type Color = CInt
 
 mkImage :: Ptr GDImage -> IO Image
-mkImage img = do fp <- mallocForeignPtr
-                 withForeignPtr fp $ \p -> poke p img
-                 addForeignPtrFinalizer ptr_gdImagePtrDestroyIfNotNull fp
+mkImage img = do fp <- F.mallocForeignPtr
+                 F.withForeignPtr fp $ \p -> F.poke p img
+                 F.addForeignPtrFinalizer ptr_gdImagePtrDestroyIfNotNull fp
                  return $ Image fp
 
 -- | Creates an image, performs an operation on the image, and
 -- frees it.
--- This function allows block scoped management of 'Image' objects.
--- If you are handling large images, the delay before the finalizer which frees
--- the image runs may cause significant temporary extra memory use.
--- Use this function to force the image to be freed as soons as you are done with it.
--- Note that it is unsafe to hold on to the 'Image' after the
--- function is done.
-withImage :: IO Image -- ^ Image creation action.
+-- This function allows block scoped management of 'Image'
+-- objects.  If you are handling large images, the delay before
+-- the finalizer which frees the image runs may cause significant
+-- temporary extra memory use.  Use this function to force the
+-- image to be freed as soons as you are done with it.  Note that
+-- it is unsafe to hold on to the 'Image' after the function is
+-- done.
+withImage :: IO Image        -- ^ Image creation action.
           -> (Image -> IO b) -- ^ Some operation on the image. The result should
                              -- not reference the 'Image'.
           -> IO b
@@ -181,21 +188,22 @@ withImage ini f = bracket ini freeImage f
 -- Safe to call twice. Doesn't free the 'ForeignPtr', we rely on the
 -- GC to do that.
 freeImage :: Image -> IO ()
-freeImage (Image fp) = withForeignPtr fp $ 
+freeImage (Image fp) = F.withForeignPtr fp $ 
   \pp -> do p <- peek pp
-            poke pp nullPtr
-            unless (p == nullPtr) $ gdImageDestroy p
+            F.poke pp F.nullPtr
+            unless (p == F.nullPtr) $ gdImageDestroy p
 
 withImagePtr :: Image -> (Ptr GDImage -> IO a) -> IO a
-withImagePtr (Image fp) f = withForeignPtr fp $
-  \pp -> peek pp >>= \p -> if p == nullPtr then fail "Image has been freed." else f p
+withImagePtr (Image fp) f = F.withForeignPtr fp $
+  \pp -> peek pp >>= \p ->
+       if p == F.nullPtr then fail "Image has been freed." else f p
 
 -- | Create a new empty image.
 newImage :: Size -> IO Image
 newImage (w,h) = newImage_ (int w) (int h)
 
 newImage_  :: CInt -> CInt -> IO Image
-newImage_ w h = do p <- throwIfNull "gdImageCreateTrueColor" $
+newImage_ w h = do p <- F.throwIfNull "gdImageCreateTrueColor" $
                         gdImageCreateTrueColor w h
                    mkImage p
 
@@ -210,8 +218,8 @@ copyImage i = withImagePtr i f
                  onNewImage w h (\p' -> gdImageCopy p' p 0 0 0 0 w h)
 
 -- | Copy a region of one image into another
-copyRegion :: Point -- ^ Source upper left-hand corner
-              -> Size -- ^ Size of copied region
+copyRegion :: Point    -- ^ Source upper left-hand corner
+              -> Size  -- ^ Size of copied region
               -> Image -- ^ Source image
               -> Point -- ^ Destination upper left-hand corner
               -> Image -- ^ Destination image
@@ -219,20 +227,24 @@ copyRegion :: Point -- ^ Source upper left-hand corner
 copyRegion (srcX, srcY) (w, h) srcIPtr (dstX, dstY) dstIPtr
     = withImagePtr dstIPtr $
       \dstImg -> withImagePtr srcIPtr $
-      \srcImg -> gdImageCopy dstImg srcImg (int dstX) (int dstY) (int srcX) (int srcY) (int w) (int h)
+      \srcImg -> gdImageCopy dstImg srcImg (int dstX) (int dstY)
+                 (int srcX) (int srcY) (int w) (int h)
 
 -- | Copy a region of one image into another, rescaling the region 
 copyRegionScaled :: Point -- ^ Source upper left-hand corner
-                 -> Size -- ^ Size of source region
+                 -> Size  -- ^ Size of source region
                  -> Image -- ^ Source image
                  -> Point -- ^ Destination upper left-hand corner
-                 -> Size -- ^ Size of destination region
+                 -> Size  -- ^ Size of destination region
                  -> Image -- ^ Destination image
                  -> IO ()
-copyRegionScaled (srcX, srcY) (srcW, srcH) srcIPtr (dstX, dstY) (dstW, dstH) dstIPtr
+copyRegionScaled (srcX, srcY) (srcW, srcH) srcIPtr (dstX, dstY) (dstW, dstH)
+                 dstIPtr
     = withImagePtr dstIPtr $
       \dstImg -> withImagePtr srcIPtr $
-      \srcImg -> gdImageCopyResampled dstImg srcImg (int dstX) (int dstY) (int srcX) (int srcY) (int dstW) (int dstH) (int srcW) (int srcH)
+      \srcImg -> gdImageCopyResampled dstImg srcImg (int dstX) (int dstY)
+                 (int srcX) (int srcY) (int dstW) (int dstH)
+                 (int srcW) (int srcH)
 
 --
 -- * Querying
@@ -343,21 +355,21 @@ setPixel (x,y) c i =
 -- * Colors
 --
 
-rgb :: Int -- ^ Red (0-255)
-         -> Int -- ^ Green (0-255)
-         -> Int -- ^ Blue (0-255)
-         -> Color
+rgb :: Int    -- ^ Red (0-255)
+       -> Int -- ^ Green (0-255)
+       -> Int -- ^ Blue (0-255)
+       -> Color
 rgb r g b = rgba r g b 0
 
-rgba :: Int -- ^ Red (0-255)
-          -> Int -- ^ Green (0-255)
-          -> Int -- ^ Blue (0-255)
-          -> Int -- ^ Alpha (0-127), 0 is opaque, 127 is transparent
-          -> Color
+rgba :: Int    -- ^ Red (0-255)
+        -> Int -- ^ Green (0-255)
+        -> Int -- ^ Blue (0-255)
+        -> Int -- ^ Alpha (0-127), 0 is opaque, 127 is transparent
+        -> Color
 rgba r g b a = 
-    (int a `shiftL` 24) .|.
-    (int r `shiftL` 16) .|.
-    (int g `shiftL` 8)  .|.
+    (int a `F.shiftL` 24) .|.
+    (int r `F.shiftL` 16) .|.
+    (int g `F.shiftL` 8)  .|.
     int b
 
 --

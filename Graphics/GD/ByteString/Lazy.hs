@@ -2,10 +2,10 @@ module Graphics.GD.ByteString.Lazy (
                     -- * Types
                     Image, Size, Point, Color,
                     -- * Creating and copying images
-                    newImage, copyImage, 
-                    copyRegion, copyRegionScaled,
+                    GD.newImage, GD.copyImage, 
+                    GD.copyRegion, GD.copyRegionScaled,
                     -- * Memory management
-                    withImage,
+                    GD.withImage,
                     -- * Loading images
                     -- ** JPEG
                     loadJpegFile, loadJpegData, loadJpegByteString,
@@ -21,37 +21,41 @@ module Graphics.GD.ByteString.Lazy (
                     -- ** GIF
                     saveGifFile, saveGifByteString,
                     -- * Getting image information
-                    imageSize,
+                    GD.imageSize,
                     -- * Querying
-                    getPixel,
+                    GD.getPixel,
                     -- * Manipulating images
-                    resizeImage, rotateImage,
+                    GD.resizeImage, GD.rotateImage,
                     -- * Drawing
-                    fillImage,
-                    drawFilledRectangle,
-                    drawFilledEllipse,
-                    drawLine,
-                    drawArc,
-                    antiAliased,
-                    setPixel,
+                    GD.fillImage,
+                    GD.drawFilledRectangle,
+                    GD.drawFilledEllipse,
+                    GD.drawLine,
+                    GD.drawArc,
+                    GD.antiAliased,
+                    GD.setPixel,
                     -- * Text
-                    useFontConfig,
+                    GD.useFontConfig,
                     drawString,
                     measureString,
                     drawStringCircle,
                     -- * Colors
-                    rgb, rgba
+                    GD.rgb, GD.rgba
                    ) where
 
-import Graphics.GD.Internal
-
-import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as L
+import           Graphics.GD.Internal     (Point,Color,Image,GDImage,CFILE,Size)
+import qualified Graphics.GD.Internal     as GD
+ 
+import qualified Data.ByteString          as B
+import qualified Data.ByteString.Lazy     as L
 import qualified Data.ByteString.Internal as BI
 
-import Control.Monad (liftM,unless)
-import Foreign
-import Foreign.C
+import           Control.Monad            (liftM,unless)
+import           Foreign                  (Ptr)
+import qualified Foreign                  as F
+import           Foreign                  (peek)
+import           Foreign.C                (CInt)
+import           Foreign.C                (peekCAString,peekCAString)
 
 --
 -- * Loading images
@@ -59,13 +63,13 @@ import Foreign.C
 
 -- | Load a JPEG image from a file.
 loadJpegFile :: FilePath -> IO Image
-loadJpegFile = loadImageFile gdImageCreateFromJpeg
+loadJpegFile = loadImageFile GD.gdImageCreateFromJpeg
 
 -- | Load a JPEG image from a buffer.
-loadJpegData :: Int -- ^ Buffer size.
+loadJpegData :: Int   -- ^ Buffer size.
              -> Ptr a -- ^ Buffer with image data.
              -> IO Image
-loadJpegData = loadImageData gdImageCreateFromJpegPtr
+loadJpegData = loadImageData GD.gdImageCreateFromJpegPtr
 
 -- | Load a JPEG image from a ByteString
 loadJpegByteString :: L.ByteString -> IO Image
@@ -74,13 +78,13 @@ loadJpegByteString = onByteStringData loadJpegData
 
 -- | Load a PNG image from a file.
 loadPngFile :: FilePath -> IO Image
-loadPngFile = loadImageFile gdImageCreateFromPng
+loadPngFile = loadImageFile GD.gdImageCreateFromPng
 
 -- | Load a PNG image from a buffer.
-loadPngData :: Int -- ^ Buffer size.
+loadPngData :: Int   -- ^ Buffer size.
             -> Ptr a -- ^ Buffer with image data.
             -> IO Image
-loadPngData = loadImageData gdImageCreateFromPngPtr
+loadPngData = loadImageData GD.gdImageCreateFromPngPtr
 
 -- | Load a PNG image from a ByteString
 loadPngByteString :: L.ByteString -> IO Image
@@ -88,13 +92,13 @@ loadPngByteString = onByteStringData loadPngData
 
 -- | Load a GIF image from a file.
 loadGifFile :: FilePath -> IO Image
-loadGifFile = loadImageFile gdImageCreateFromGif
+loadGifFile = loadImageFile GD.gdImageCreateFromGif
 
 -- | Load a GIF image from a buffer.
-loadGifData :: Int -- ^ Buffer size.
+loadGifData :: Int   -- ^ Buffer size.
             -> Ptr a -- ^ Buffer with image data.
             -> IO Image
-loadGifData = loadImageData gdImageCreateFromGifPtr
+loadGifData = loadImageData GD.gdImageCreateFromGifPtr
 
 -- | Load a GIF image from a ByteString
 loadGifByteString :: L.ByteString -> IO Image
@@ -102,22 +106,22 @@ loadGifByteString = onByteStringData loadGifData
 
 
 loadImageFile :: (Ptr CFILE -> IO (Ptr GDImage)) -> FilePath -> IO Image
-loadImageFile f file = 
-    do p <- throwIfNull ("Loading image from " ++ file) $ withCFILE file "rb" f
-       mkImage p
+loadImageFile f file = do
+  p <- F.throwIfNull ("Loading image from " ++ file) $ GD.withCFILE file "rb" f
+  GD.mkImage p
 
 loadImageData :: (CInt -> Ptr a -> IO (Ptr GDImage)) -> Int -> Ptr a -> IO Image
 loadImageData f sz buf =
-    do p <- throwIfNull ("Loading image") $ f (fromIntegral sz) buf
-       mkImage p
+    do p <- F.throwIfNull ("Loading image") $ f (fromIntegral sz) buf
+       GD.mkImage p
 
 onByteStringData :: (Int -> Ptr a -> IO b) -> L.ByteString -> IO b
-onByteStringData f bstr 
-    = case BI.toForeignPtr (lazyToStrict bstr) of
-        (fptr, start, sz) -> withForeignPtr fptr (\ptr -> f sz (plusPtr ptr start))
-
-lazyToStrict :: L.ByteString -> B.ByteString
-lazyToStrict = foldr1 B.append . L.toChunks
+onByteStringData f bstr =
+  case BI.toForeignPtr (lazyToStrict bstr) of
+    (fptr, start, sz) -> F.withForeignPtr fptr $
+                           \ptr -> f sz (F.plusPtr ptr start)
+  where lazyToStrict :: L.ByteString -> B.ByteString
+        lazyToStrict = foldr1 B.append . L.toChunks
 
 --
 -- * Saving images
@@ -126,97 +130,119 @@ lazyToStrict = foldr1 B.append . L.toChunks
 -- | Save an image as a JPEG file.
 saveJpegFile :: Int -- ^ quality: 0-95, or negative for default quality.
              -> FilePath -> Image -> IO ()
-saveJpegFile q = saveImageFile (\p h -> gdImageJpeg p h (fromIntegral q))
+saveJpegFile q = saveImageFile (\p h -> GD.gdImageJpeg p h (fromIntegral q))
 
 -- | Write a JPEG format ByteString of an image.
 saveJpegByteString :: Int -> Image -> IO L.ByteString
-saveJpegByteString q = saveImageByteString (\p h -> gdImageJpegPtr p h (fromIntegral q))
+saveJpegByteString q =
+  saveImageByteString (\p h -> GD.gdImageJpegPtr p h (fromIntegral q))
 
 
 -- | Save an image as a PNG file.
 savePngFile :: FilePath -> Image -> IO ()
-savePngFile = saveImageFile gdImagePng
+savePngFile = saveImageFile GD.gdImagePng
 
 -- | Write a PNG format ByteString of an image.
 savePngByteString :: Image -> IO L.ByteString
-savePngByteString = saveImageByteString gdImagePngPtr
+savePngByteString = saveImageByteString GD.gdImagePngPtr
 
 
 -- | Save an image as a GIF file.
 saveGifFile :: FilePath -> Image -> IO ()
-saveGifFile = saveImageFile gdImageGif
+saveGifFile = saveImageFile GD.gdImageGif
 
 -- | Write a GIF format ByteString of an image.
 saveGifByteString :: Image -> IO L.ByteString
-saveGifByteString = saveImageByteString gdImageGifPtr
+saveGifByteString = saveImageByteString GD.gdImageGifPtr
 
-saveImageFile :: (Ptr GDImage -> Ptr CFILE -> IO ()) -> FilePath -> Image -> IO ()
-saveImageFile f file i = withImagePtr i (\p -> withCFILE file "wb" (f p))
+saveImageFile :: (Ptr GDImage -> Ptr CFILE -> IO ()) -> FilePath -> Image
+                 -> IO ()
+saveImageFile f file i = GD.withImagePtr i (\p -> GD.withCFILE file "wb" (f p))
 
-saveImageByteString :: (Ptr GDImage -> Ptr CInt -> IO (Ptr a)) -> Image -> IO (L.ByteString)
-saveImageByteString f img = withImagePtr img (\p -> dataByteString (f p))
+saveImageByteString :: (Ptr GDImage -> Ptr CInt -> IO (Ptr a)) -> Image
+                       -> IO (L.ByteString)
+saveImageByteString f img = GD.withImagePtr img (\p -> dataByteString (f p))
 
 dataByteString :: (Ptr CInt -> IO (Ptr a)) -> IO L.ByteString
-dataByteString f = alloca $ \szPtr -> do datPtr <- f szPtr >>= newForeignPtr gdFree . castPtr
-                                         liftM (L.fromChunks . return . BI.fromForeignPtr datPtr 0 . fromIntegral) (peek szPtr)
+dataByteString f = F.alloca $ \szPtr -> do
+  datPtr <- f szPtr >>= F.newForeignPtr GD.gdFree . F.castPtr
+  liftM (L.fromChunks . return . BI.fromForeignPtr datPtr 0 . fromIntegral)
+        (peek szPtr)
 
 --
 -- * Text
 --
 
--- | Draw a ByteString using the FreeType 2.x library
-drawString :: L.ByteString -- ^ Font name
-             -> Double       -- ^ Font point size
-             -> Double       -- ^ Angle in counterclockwise radians
-             -> Point        -- ^ Origin
-             -> L.ByteString -- ^ Text, including HTML entities
-             -> Color -> Image -> IO (Point, Point, Point, Point) -- ^ Bounding box of the drawn text
-drawString fontName ptSize angle (oriX, oriY) txt color img
-    = withImagePtr img $ drawStringImagePtr color fontName ptSize angle (oriX, oriY) txt
+-- | Draw a string using the FreeType 2.x library
+drawString :: B.ByteString -- ^ Font name
+           -> Double       -- ^ Font point size
+           -> Double       -- ^ Angle in counterclockwise radians
+           -> Point        -- ^ Origin
+           -> B.ByteString -- ^ Text, including HTML entities
+           -> Color -> Image
+           -> IO (Point, Point, Point, Point) -- ^ Bounding box
+                                              -- of the drawn
+                                              -- text
+drawString fontName ptSize angle (oriX, oriY) txt color img =
+  GD.withImagePtr img $ drawStringImagePtr color fontName ptSize angle
+                                           (oriX, oriY) txt
 
 -- | Measure a string using the FreeType 2.x library.  This computes
 -- the bounding box but does not actually draw the string to any
 -- image.
-measureString :: L.ByteString -- ^ Font name
-              -> Double -- ^ Font point size
-              -> Double -- ^ Angle in counterclockwise radians
-              -> Point -- ^ Origin
-              -> L.ByteString -- ^ Text, including HTML entities
-              -> Color -> IO (Point, Point, Point, Point) -- ^ Bounding box of the drawn text
+measureString :: B.ByteString -- ^ Font name
+              -> Double       -- ^ Font point size
+              -> Double       -- ^ Angle in counterclockwise radians
+              -> Point        -- ^ Origin
+              -> B.ByteString -- ^ Text, including HTML entities
+              -> Color
+              -> IO (Point, Point, Point, Point) -- ^ Bounding
+                                                 -- box of the
+                                                 -- drawn text
 measureString fontName ptSize angle (oriX, oriY) txt color
-    = drawStringImagePtr color fontName ptSize angle (oriX, oriY) txt nullPtr
+    = drawStringImagePtr color fontName ptSize angle (oriX, oriY) txt F.nullPtr
 
-drawStringImagePtr :: Color -> L.ByteString -> Double -> Double -> Point -> L.ByteString -> Ptr GDImage -> IO (Point, Point, Point, Point)
+drawStringImagePtr :: Color -> B.ByteString -> Double -> Double -> Point
+                      -> B.ByteString -> Ptr GDImage
+                      -> IO (Point, Point, Point, Point)
 drawStringImagePtr color fontName ptSize angle (oriX, oriY) txt imgPtr
-    = allocaArray 8 $
-      \bboxPtr -> toCStr fontName $
-      \cFontName -> toCStr txt $
-      \cTxt -> do res <- gdImageStringFT imgPtr bboxPtr color cFontName (double ptSize) (double angle) (int oriX) (int oriY) cTxt
-                  if res == nullPtr
-                     then peekArray 8 bboxPtr >>= parseBBox
+    = F.allocaArray 8 $
+      \bboxPtr -> B.useAsCString fontName $
+      \cFontName -> B.useAsCString txt $
+      \cTxt -> do res <- GD.gdImageStringFT imgPtr bboxPtr color cFontName
+                                            (GD.double ptSize) (GD.double angle)
+                                            (GD.int oriX) (GD.int oriY) cTxt
+                  if res == F.nullPtr
+                     then F.peekArray 8 bboxPtr >>= parseBBox
                      else peekCAString res >>= ioError . userError
-    where parseBBox l = case map int l of
-                          [llx, lly, lrx, lry, urx, ury, ulx, uly] -> return ((llx, lly), (lrx, lry), (urx, ury), (ulx, uly))
-                          _ -> ioError $ userError $ "parseBBox with /= 8 elements: " ++ show l
+    where parseBBox l =
+            case map GD.int l of 
+              [llx, lly, lrx, lry, urx, ury, ulx, uly] ->
+                return ((llx, lly), (lrx, lry), (urx, ury), (ulx, uly))
+              _ -> ioError $ userError $
+                     "parseBBox with /= 8 elements: " ++ show l
 
 -- | Draw strings around the top and bottom of a torus
-drawStringCircle :: Point -- ^ Center of text path circle
-                 -> Double -- ^ Outer radius of text
-                 -> Double -- ^ Fraction of radius occupied by text
-                 -> Double -- ^ Portion of circle arc filled by text
-                 -> L.ByteString -- ^ Font name
-                 -> Double -- ^ Font size hint
-                 -> L.ByteString -- ^ Text to write on the top of the circle
-                 -> L.ByteString -- ^ Text to write on the bottom of the circle
-                 -> Color -- ^ Text color
+drawStringCircle :: Point        -- ^ Center of text path circle
+                 -> Double       -- ^ Outer radius of text
+                 -> Double       -- ^ Fraction of radius occupied by text
+                 -> Double       -- ^ Portion of circle arc filled by text
+                 -> B.ByteString -- ^ Font name
+                 -> Double       -- ^ Font size hint
+                 -> B.ByteString -- ^ Text to write on the top of the circle
+                 -> B.ByteString -- ^ Text to write on the bottom of the circle
+                 -> Color        -- ^ Text color
                  -> Image -> IO ()
-drawStringCircle (ctrX, ctrY) rad textRad textFill fontName fontSize topTxt bottomTxt color img
-    = toCStr fontName $ 
-      \cFontName -> toCStr topTxt $
-      \cTopTxt -> toCStr bottomTxt $ 
-      \cBottomTxt -> withImagePtr img $ 
-      \imgPtr -> do res <- gdImageStringFTCircle imgPtr (int ctrX) (int ctrY) (double rad) (double textRad) (double textFill) cFontName (double fontSize) cTopTxt cBottomTxt  color                    
-                    unless (res == nullPtr) (peekCAString res >>= ioError . userError)
-
-toCStr :: L.ByteString -> (CString -> IO a) -> IO a
-toCStr = B.useAsCString . lazyToStrict
+drawStringCircle (ctrX, ctrY) rad textRad textFill fontName fontSize topTxt
+                 bottomTxt color img
+    = B.useAsCString fontName $ 
+      \cFontName -> B.useAsCString topTxt $
+      \cTopTxt -> B.useAsCString bottomTxt $ 
+      \cBottomTxt -> GD.withImagePtr img $ 
+      \imgPtr -> do
+        res <- GD.gdImageStringFTCircle imgPtr (GD.int ctrX) (GD.int ctrY)
+                                        (GD.double rad) (GD.double textRad)
+                                        (GD.double textFill) cFontName
+                                        (GD.double fontSize) cTopTxt
+                                        cBottomTxt  color                    
+        unless (res == F.nullPtr) (peekCAString res >>= ioError . userError)
