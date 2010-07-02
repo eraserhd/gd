@@ -17,12 +17,7 @@ Extra-source-files:  cbits/gd-extras.h
 Flag bytestring-in-base
 
 Library
-  if flag(bytestring-in-base)
-    -- bytestring was in base-2.0 and 2.1.1
-    Build-depends: base >= 2.0 && < 2.2
-  else
-    -- in base 1.0 and 3.0 bytestring is a separate package
-    Build-depends: base < 2.0 || >= 3, bytestring >= 0.9
+  Build-depends: base >= 4 && < 5, bytestring >= 0.9.1.6
   Extensions: ForeignFunctionInterface
   Exposed-Modules: Graphics.GD, Graphics.GD.ByteString, Graphics.GD.ByteString.Lazy
   Ghc-options: -Wall

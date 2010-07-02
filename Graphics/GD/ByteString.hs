@@ -51,8 +51,6 @@ import qualified Data.ByteString.Internal as BI
 import Control.Monad (liftM,unless)
 import Foreign
 import Foreign.C
-import Foreign.ForeignPtr
-import Foreign.Marshal.Error
 
 --
 -- * Loading images

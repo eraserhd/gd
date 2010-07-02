@@ -45,9 +45,6 @@ import Control.Monad (liftM, unless)
 import qualified Data.ByteString.Internal as B
 import Foreign
 import Foreign.C
-import Foreign.ForeignPtr
-import Foreign.Marshal.Error
-import System.IO.Error
 
 data CFILE = CFILE
 

@@ -4,8 +4,6 @@ import Control.Exception (bracket)
 import Control.Monad (liftM, unless)
 import Foreign
 import Foreign.C
-import Foreign.ForeignPtr
-import Foreign.Marshal.Error
 
 data CFILE = CFILE
 
