@@ -32,12 +32,19 @@ module Graphics.GD (
                     drawArc,
                     antiAliased,
                     setPixel,
+                    -- * Query
+                    getPixel,
                     -- * Text
                     useFontConfig,
                     drawString, measureString,
                     drawStringCircle,
                     -- * Colors
-                    rgb, rgba
+                    rgb,
+                    rgba,
+                    alpha,
+                    red,
+                    green,
+                    blue
                    ) where
 
 import           Control.Exception        (bracket)
@@ -173,6 +180,11 @@ foreign import ccall "gd.h gdImageSetAntiAliased" gdImageSetAntiAliased
 
 foreign import ccall "gd.h gdImageSetPixel" gdImageSetPixel
     :: Ptr GDImage -> CInt -> CInt -> CInt -> IO ()
+
+-- Query functions
+
+foreign import ccall "gd.h gdImageGetPixel" gdImageGetPixel
+    :: Ptr GDImage -> CInt -> CInt -> IO CInt
 
 -- Text functions
 
@@ -491,6 +503,16 @@ setPixel (x,y) c i =
         gdImageSetPixel p (int x) (int y) c
 
 --
+-- * Query
+--
+
+-- | Retrieve the color of a pixel
+getPixel :: Point -> Image -> IO Color
+getPixel (x,y) i =
+    do withImagePtr i $ \p ->
+        gdImageGetPixel p (int x) (int y)
+
+--
 -- * Text
 --
 
@@ -592,6 +614,21 @@ rgba r g b a =
     (int g `F.shiftL` 8)  .|.
     int b
 
+-- | Extract the alpha component of a color
+alpha :: Color -> Int
+alpha c = int $ (c `F.shiftR` 24) F..&. 0x7f
+
+-- | Extract the red component of a color
+red :: Color -> Int
+red c = int $ (c `F.shiftR` 16) F..&. 0xff
+
+-- | Extract the green component of a color
+green :: Color -> Int
+green c = int $ (c `F.shiftR` 8) F..&. 0xff
+
+-- | Extract the blue component of a color
+blue :: Color -> Int
+blue c = int $ c F..&. 0xff
 
 --
 -- * Utilities
